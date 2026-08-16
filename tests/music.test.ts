@@ -1,0 +1,98 @@
+import { describe, expect, it } from 'vitest'
+import {
+  A4_MIDI,
+  centsFromTarget,
+  frequencyFromMidi,
+  midiFromFrequency,
+  correctionAngle,
+} from '../src/music/pitchMath'
+import {
+  KEY_SIGNATURES,
+  keyAt,
+  notationForMidi,
+  isDiatonicMidi,
+} from '../src/music/spelling'
+import { staffPosition, candidateFromStaff, staffY, accidentalFromStaffX } from '../src/music/staff'
+import { traceSegments } from '../src/recording/trace'
+import { makeDemoSamples, demoTargetMidi } from '../src/demo'
+
+describe('pitch math', () => {
+  it('maps 440 Hz to A4', () => expect(midiFromFrequency(440)).toBe(69))
+  it('calculates equal tempered semitone frequencies', () => expect(frequencyFromMidi(70)).toBeCloseTo(466.1638, 3))
+  it('calculates cents around a target', () => {
+    expect(centsFromTarget(440, 69)).toBeCloseTo(0)
+    expect(centsFromTarget(440 * 2 ** (0.25 / 12), 69)).toBeCloseTo(25)
+    expect(centsFromTarget(440 * 2 ** (-0.25 / 12), 69)).toBeCloseTo(-25)
+  })
+  it('chooses the nearest chromatic semitone', () => expect(midiFromFrequency(frequencyFromMidi(70) * 2 ** (0.49 / 12))).toBe(70))
+  it('uses upward correction for flat and downward correction for sharp', () => {
+    expect(correctionAngle(-30)).toBeGreaterThan(0)
+    expect(correctionAngle(30)).toBeLessThan(0)
+    expect(correctionAngle(2)).toBe(0)
+    expect(Math.abs(correctionAngle(200))).toBe(28)
+  })
+})
+
+describe('keys and spelling', () => {
+  it('walks the circle of fifths in both directions', () => {
+    expect([0, 1, 2, 3].map((i) => keyAt(i, 'sharp').id)).toEqual(['C', 'G', 'D', 'A'])
+    expect([0, 1, 2, 3].map((i) => keyAt(i, 'flat').id)).toEqual(['C', 'F', 'Bb', 'Eb'])
+    expect(KEY_SIGNATURES.at(-1)?.vexKey).toBe('Cb')
+  })
+  it('classifies key examples correctly', () => {
+    expect(isDiatonicMidi(66, keyAt(0, 'sharp'))).toBe(false)
+    expect(isDiatonicMidi(66, keyAt(1, 'sharp'))).toBe(true)
+    expect(isDiatonicMidi(70, keyAt(0, 'sharp'))).toBe(false)
+    expect(isDiatonicMidi(70, keyAt(1, 'flat'))).toBe(true)
+    expect(isDiatonicMidi(65, keyAt(1, 'sharp'))).toBe(false)
+  })
+  it('changes enharmonic spelling without changing pitch identity', () => {
+    expect(notationForMidi(66, keyAt(1, 'sharp')).written).toMatchObject({ letter: 'F', accidental: 'sharp' })
+    expect(notationForMidi(66, keyAt(6, 'flat')).written).toMatchObject({ letter: 'G', accidental: 'flat' })
+    expect(notationForMidi(61, keyAt(4, 'sharp')).written).toMatchObject({ letter: 'C', accidental: 'sharp' })
+    expect(notationForMidi(61, keyAt(5, 'flat')).written).toMatchObject({ letter: 'D', accidental: 'flat' })
+    expect(notationForMidi(70, keyAt(3, 'flat')).written).toMatchObject({ letter: 'B', accidental: 'flat' })
+  })
+})
+
+describe('staff coordinates', () => {
+  it('maps treble and bass notes with ledger-friendly coordinates', () => {
+    expect(staffPosition({ letter: 'B', accidental: 'natural', octave: 4 }, 'treble')).toBe(0)
+    expect(staffPosition({ letter: 'C', accidental: 'natural', octave: 4 }, 'treble')).toBe(-6)
+    expect(staffPosition({ letter: 'D', accidental: 'natural', octave: 3 }, 'bass')).toBe(0)
+    expect(candidateFromStaff(0, 'treble')).toMatchObject({ letter: 'B', octave: 4 })
+    expect(staffY(0, 'treble')).toBe(92.5)
+    expect(staffY(0, 'bass')).toBe(216.5)
+    expect(staffY(-6, 'treble')).toBe(122.5)
+    expect(accidentalFromStaffX(10, 100)).toBe('flat')
+    expect(accidentalFromStaffX(50, 100)).toBe('natural')
+    expect(accidentalFromStaffX(90, 100)).toBe('sharp')
+  })
+})
+
+describe('trace interpretation', () => {
+  const samples = (midi: number, duration: number) => [
+    { timestampMs: 0, frequencyHz: frequencyFromMidi(midi), confidence: 0.95 },
+    { timestampMs: duration * 1000, frequencyHz: frequencyFromMidi(midi), confidence: 0.95 },
+  ]
+  it('annotates only regions longer than 0.2 seconds', () => {
+    expect(traceSegments(samples(66, 0.2), keyAt(0, 'sharp'))[0].marker).toBe(false)
+    expect(traceSegments(samples(66, 0.201), keyAt(0, 'sharp'))[0].marker).toBe(true)
+  })
+  it('changes trace color and annotations when the key changes', () => {
+    expect(traceSegments(samples(66, 0.3), keyAt(0, 'sharp'))[0]).toMatchObject({ color: 'red', accidental: 'sharp', marker: true })
+    expect(traceSegments(samples(66, 0.3), keyAt(1, 'sharp'))[0]).toMatchObject({ color: 'default', marker: false })
+    expect(traceSegments(samples(65, 0.3), keyAt(1, 'sharp'))[0]).toMatchObject({ color: 'neutral', accidental: 'natural', marker: true })
+  })
+  it('uses the last played note for the demo target', () => {
+    expect(demoTargetMidi(64)).toBe(64)
+    expect(demoTargetMidi(null)).toBe(60)
+  })
+  it('creates a full-window demo with continuous movement', () => {
+    const demo = makeDemoSamples(8000)
+    expect(demo).toHaveLength(81)
+    expect(demo[0].timestampMs).toBe(0)
+    expect(demo.at(-1)?.timestampMs).toBe(8000)
+    expect(new Set(demo.map((sample) => Math.round(12 * Math.log2(sample.frequencyHz / 440) + 69))).size).toBeGreaterThan(3)
+  })
+})

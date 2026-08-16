@@ -1,0 +1,129 @@
+import './styles.css'
+import { Renderer, Stave, StaveNote, Voice, Formatter, Accidental } from 'vexflow'
+import { PitchDetector } from 'pitchy'
+import { SplendidGrandPiano } from 'smplr'
+import { centsFromTarget, continuousMidiFromFrequency, correctionAngle, frequencyFromMidi, midiFromFrequency } from './music/pitchMath'
+import { accidentalGlyph, keyAt, notationForMidi, type KeySignature, type WrittenPitch } from './music/spelling'
+import { staffPosition, vexKey, candidateFromStaff, staffY, accidentalFromStaffX } from './music/staff'
+import { traceSegments, type RawSample } from './recording/trace'
+import { makeDemoSamples, demoTargetMidi } from './demo'
+
+type Clef = 'treble' | 'bass'
+const app = document.querySelector<HTMLDivElement>('#app')!
+app.innerHTML = `
+  <main class="shell">
+    <header class="topbar"><div><p class="eyebrow">REAL-TIME VOCAL FEEDBACK</p><h1>Pitchline</h1></div><div class="status-pill"><span class="status-dot"></span><span id="status">Ready to listen</span></div></header>
+    <section class="hero"><div><p class="kicker">SING WITH PRECISION</p><h2>Find your note.<br><em>Stay in tune.</em></h2><p class="lede">A calm, visual guide for your voice. Start the microphone, then follow the purple arrow toward the center of each note.</p></div><div class="hero-note">♪</div></section>
+    <section class="controls" aria-label="monitor controls">
+      <button class="primary" id="mic"><span class="mic-icon">●</span> Show arrows</button>
+      <button class="record" id="record"><span class="record-icon"></span> Record</button><button class="playback" id="playback" hidden><span>▶</span> Play recording</button>
+      <div class="key-control"><span class="control-label">KEY</span><button id="flatter" aria-label="Move toward flatter keys">←</button><strong id="key-name">C major</strong><button id="sharper" aria-label="Move toward sharper keys">→</button></div>
+    </section>
+    <section class="monitor-card">
+      <div class="readout"><div><span class="readout-label">CURRENT TARGET</span><strong id="target">—</strong><small id="frequency">Waiting for a note</small></div><div class="tuning"><span id="cents">—</span><small>cents</small></div></div>
+      <div class="staff-wrap" id="staff-wrap"><div id="staff"></div><canvas id="staff-trace" aria-hidden="true"></canvas><svg id="overlay" aria-hidden="true"></svg></div>
+      <div class="legend"><span><i class="swatch purple"></i>Live pitch</span><span><i class="swatch default"></i>Diatonic history</span><span><i class="swatch red"></i>Sharp chromatic</span><span><i class="swatch blue"></i>Flat chromatic</span></div>
+    </section>
+    <section class="trace-card"><div class="trace-header"><div><span class="readout-label">PITCH HISTORY</span><h3 id="record-label">Live monitor · 8 second window</h3></div><span class="trace-time" id="trace-time">0:00</span></div><canvas id="trace" height="190"></canvas><p class="assumption">Notation assumes equal temperament (A4 = 440 Hz) and uses the key signature to choose conventional enharmonic spellings.</p></section>
+    <footer><span>Microphone audio is processed locally in your browser.</span><span>Click the staff to hear a piano note · Press <kbd>${'`'}</kbd> for a visual demo.</span></footer>
+  </main>`
+
+const staffEl = document.querySelector<HTMLDivElement>('#staff')!
+const overlay = document.querySelector<SVGSVGElement>('#overlay')!
+const staffTrace = document.querySelector<HTMLCanvasElement>('#staff-trace')!
+const traceCanvas = document.querySelector<HTMLCanvasElement>('#trace')!
+const traceCtx = traceCanvas.getContext('2d')!
+const targetEl = document.querySelector('#target')!
+const frequencyEl = document.querySelector('#frequency')!
+const centsEl = document.querySelector('#cents')!
+const statusEl = document.querySelector('#status')!
+const micButton = document.querySelector<HTMLButtonElement>('#mic')!
+const recordButton = document.querySelector<HTMLButtonElement>('#record')!
+const playbackButton = document.querySelector<HTMLButtonElement>('#playback')!
+const keyName = document.querySelector('#key-name')!
+const staffWrap = document.querySelector<HTMLDivElement>('#staff-wrap')!
+const state = { keyIndex: 0, direction: 'sharp' as 'sharp' | 'flat', key: keyAt(0, 'sharp'), samples: [] as RawSample[], recording: false, stream: null as MediaStream | null, audioContext: null as AudioContext | null, raf: 0, currentMidi: null as number | null, currentFrequency: null as number | null, lastPlayedMidi: null as number | null, demoActive: false, arrowsEnabled: false, hoverMidi: null as number | null, hoverX: 0, hoverY: 0, hoverPinned: false, currentCents: 0, lastReliable: 0, piano: null as ReturnType<typeof SplendidGrandPiano> | null }
+const purple = '#7958d8'
+const keyLabel = (key: KeySignature) => key.id === 'C' ? 'C major' : `${key.id} major`
+
+function renderStaff() {
+  const width = Math.max(640, staffWrap.clientWidth || 900)
+  staffEl.innerHTML = ''
+  const renderer = new Renderer(staffEl, Renderer.Backends.SVG)
+  renderer.resize(width, 285)
+  const context = renderer.getContext()
+  const treble = new Stave(80, 32, width - 120).addClef('treble').addKeySignature(state.key.vexKey)
+  const bass = new Stave(80, 156, width - 120).addClef('bass').addKeySignature(state.key.vexKey)
+  treble.setContext(context).draw(); bass.setContext(context).draw()
+  const notes = (clef: Clef) => { const octave = clef === 'treble' ? 4 : 2; const note = new StaveNote({ clef, keys: [`c/${octave}`], duration: 'w' }); note.setStyle({ fillStyle: '#d9dbe7', strokeStyle: '#d9dbe7' }); return note }
+  const drawGuide = (clef: Clef, stave: Stave) => { const voice = new Voice({ numBeats: 4, beatValue: 4 }).setMode(Voice.Mode.SOFT); voice.addTickables([notes(clef)]); new Formatter().joinVoices([voice]).format([voice], stave.getNoteEndX() - stave.getNoteStartX() - 10); voice.draw(context, stave) }
+  drawGuide('treble', treble); drawGuide('bass', bass)
+  overlay.setAttribute('viewBox', `0 0 ${width} 285`); overlay.setAttribute('width', `${width}`); overlay.setAttribute('height', '285')
+  drawOverlay(width)
+  drawTrace()
+  drawStaffTrace()
+}
+function yFor(pitch: WrittenPitch, clef: Clef) { return staffY(staffPosition(pitch, clef), clef) }
+function chooseClef(midi: number): Clef { return midi >= 60 ? 'treble' : 'bass' }
+function appendLedgerLines(pitch: WrittenPitch, clef: Clef, x: number, y: number, opacity = 1) {
+  const position = staffPosition(pitch, clef); const first = position > 4 ? 6 : -6; const step = position > 4 ? 2 : -2
+  if ((position > 4 && position < 6) || (position < -4 && position > -6)) return
+  const group = document.createElementNS('http://www.w3.org/2000/svg', 'g'); group.setAttribute('transform', `translate(${x} ${y})`); group.setAttribute('opacity', `${opacity}`)
+  for (let linePosition = first; position > 4 ? linePosition <= position : linePosition >= position; linePosition += step) { const line = document.createElementNS('http://www.w3.org/2000/svg', 'line'); line.setAttribute('x1', '-19'); line.setAttribute('x2', '19'); line.setAttribute('y1', `${staffY(linePosition, clef) - y}`); line.setAttribute('y2', `${staffY(linePosition, clef) - y}`); line.setAttribute('stroke', '#3b3c49'); line.setAttribute('stroke-width', '1.4'); group.append(line) }
+  overlay.append(group)
+}
+function labelFor(notation: ReturnType<typeof notationForMidi>) { return `${notation.written.letter}${notation.written.accidental === 'natural' ? '' : accidentalGlyph(notation.written.accidental)}${notation.written.octave}` }
+function noteAtStaffPoint(x: number, y: number, width: number) {
+  const clef: Clef = y < 154 ? 'treble' : 'bass'; const center = clef === 'treble' ? 92.5 : 216.5; const written = candidateFromStaff(Math.round((center - y) / 5), clef); const naturalPc: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }; const accidental = accidentalFromStaffX(x, width); const baseMidi = (written.octave + 1) * 12 + naturalPc[written.letter]; const midi = baseMidi + (accidental === 'sharp' ? 1 : accidental === 'flat' ? -1 : 0); return { midi, notation: notationForMidi(midi, state.key), clef }
+}
+function drawOverlay(width: number) {
+  overlay.innerHTML = ''; const ns = 'http://www.w3.org/2000/svg'; const liveVisible = state.arrowsEnabled && state.currentMidi !== null && performance.now() - state.lastReliable <= 1200
+  if (liveVisible) {
+    const notation = notationForMidi(state.currentMidi!, state.key); const clef = chooseClef(state.currentMidi!); const x = width * 0.53; const y = yFor(notation.written, clef); const angle = correctionAngle(state.currentCents)
+    appendLedgerLines(notation.written, clef, x, y)
+    const g = document.createElementNS(ns, 'g'); g.setAttribute('transform', `translate(${x} ${y}) rotate(${angle})`)
+    const line = document.createElementNS(ns, 'line'); line.setAttribute('x1', '-82'); line.setAttribute('x2', '-8'); line.setAttribute('y1', '0'); line.setAttribute('y2', '0'); line.setAttribute('stroke', purple); line.setAttribute('stroke-width', '5'); line.setAttribute('stroke-linecap', 'round')
+    const head = document.createElementNS(ns, 'path'); head.setAttribute('d', 'M 0 0 L -16 -10 L -16 10 Z'); head.setAttribute('fill', purple); g.append(line, head)
+    const label = document.createElementNS(ns, 'text'); label.textContent = labelFor(notation); label.setAttribute('x', '-80'); label.setAttribute('y', '-14'); label.setAttribute('class', 'live-label'); g.append(label)
+    if (notation.written.accidental !== 'natural' || notation.isChromatic) { const acc = document.createElementNS(ns, 'text'); acc.textContent = accidentalGlyph(notation.written.accidental); acc.setAttribute('x', '-62'); acc.setAttribute('y', '8'); acc.setAttribute('class', 'live-accidental'); g.append(acc) }
+    overlay.append(g)
+    for (const octave of [-1, 1]) { const shadowMidi = state.currentMidi! + octave * 12; const shadowNotation = notationForMidi(shadowMidi, state.key); const shadowClef = chooseClef(shadowMidi); const shadowY = yFor(shadowNotation.written, shadowClef); appendLedgerLines(shadowNotation.written, shadowClef, x, shadowY, 0.5); const clone = g.cloneNode(true) as SVGGElement; clone.setAttribute('transform', `translate(${x} ${shadowY}) rotate(${angle})`); clone.setAttribute('opacity', '0.5'); const shadowLabel = clone.querySelector('.live-label'); if (shadowLabel) shadowLabel.textContent = labelFor(shadowNotation); clone.querySelector('.live-accidental')?.remove(); if (shadowNotation.written.accidental !== 'natural' || shadowNotation.isChromatic) { const acc = document.createElementNS(ns, 'text'); acc.textContent = accidentalGlyph(shadowNotation.written.accidental); acc.setAttribute('x', '-62'); acc.setAttribute('y', '8'); acc.setAttribute('class', 'live-accidental'); clone.append(acc) } overlay.append(clone) }
+  }
+  if (state.arrowsEnabled && state.hoverMidi !== null) { const hoverNotation = notationForMidi(state.hoverMidi, state.key); const hoverClef = chooseClef(state.hoverMidi); const hoverY = yFor(hoverNotation.written, hoverClef); appendLedgerLines(hoverNotation.written, hoverClef, state.hoverX, hoverY, 0.35); const hover = document.createElementNS(ns, 'g'); hover.setAttribute('transform', `translate(${state.hoverX} ${hoverY})`); hover.setAttribute('opacity', '0.58'); const line = document.createElementNS(ns, 'line'); line.setAttribute('x1', '-60'); line.setAttribute('x2', '-7'); line.setAttribute('y1', '0'); line.setAttribute('y2', '0'); line.setAttribute('stroke', purple); line.setAttribute('stroke-width', '2'); line.setAttribute('stroke-dasharray', '4 4'); const head = document.createElementNS(ns, 'path'); head.setAttribute('d', 'M 0 0 L -8 -5 L -8 5 Z'); head.setAttribute('fill', purple); const text = document.createElementNS(ns, 'text'); text.textContent = `play: ${labelFor(hoverNotation)}`; text.setAttribute('x', '8'); text.setAttribute('y', '-7'); text.setAttribute('class', 'hover-label'); hover.append(line, text); overlay.append(hover) }
+}function drawStaffTrace() {
+  const width = Math.max(640, staffWrap.clientWidth || 900); const height = 285; const dpr = window.devicePixelRatio || 1
+  staffTrace.width = width * dpr; staffTrace.height = height * dpr; staffTrace.style.width = `${width}px`; staffTrace.style.height = `${height}px`
+  const ctx = staffTrace.getContext('2d')!; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, width, height)
+  const visible = state.samples.filter((sample) => sample.timestampMs >= (state.samples.at(-1)?.timestampMs ?? 0) - 8000); if (!visible.length) return
+  const start = visible[0].timestampMs; const xStart = 80; const xWidth = width - 120; const colors: Record<string, string> = { default: '#343544', red: '#df5f67', blue: '#4b83d6', neutral: '#8c7b45' }
+  for (const segment of traceSegments(visible, state.key)) {
+    ctx.beginPath(); segment.points.forEach((sample, index) => { const midi = continuousMidiFromFrequency(sample.frequencyHz); const nearest = midiFromFrequency(sample.frequencyHz); const notation = notationForMidi(nearest, state.key); const clef = chooseClef(nearest); const x = xStart + ((sample.timestampMs - start) / 8000) * xWidth; const y = yFor(notation.written, clef) - (midi - nearest) * 5 / 12; index ? ctx.lineTo(x, y) : ctx.moveTo(x, y) })
+    ctx.strokeStyle = colors[segment.color]; ctx.globalAlpha = 0.82; ctx.lineWidth = 2.2; ctx.stroke(); ctx.globalAlpha = 1
+    if (segment.marker) { const middle = segment.points[Math.floor(segment.points.length / 2)]; const nearest = midiFromFrequency(middle.frequencyHz); const notation = notationForMidi(nearest, state.key); const y = yFor(notation.written, chooseClef(nearest)); const x = xStart + ((middle.timestampMs - start) / 8000) * xWidth; ctx.fillStyle = colors[segment.color]; ctx.font = 'bold 17px Georgia'; ctx.fillText(accidentalGlyph(segment.accidental as any), x + 3, y - 7) }
+  }
+}
+function drawTrace() {
+  const rect = traceCanvas.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1; traceCanvas.width = rect.width * dpr; traceCanvas.height = rect.height * dpr; traceCtx.setTransform(dpr, 0, 0, dpr, 0, 0); const w = rect.width; const h = rect.height
+  traceCtx.clearRect(0, 0, w, h); traceCtx.fillStyle = '#fbfbfe'; traceCtx.fillRect(0, 0, w, h)
+  for (let i = 0; i < 7; i++) { const y = 20 + i * 24; traceCtx.strokeStyle = i === 3 ? '#d8d3ee' : '#ececf4'; traceCtx.beginPath(); traceCtx.moveTo(0, y); traceCtx.lineTo(w, y); traceCtx.stroke() }
+  const now = state.samples.at(-1)?.timestampMs ?? 0; const start = now - 8000; const scaleY = (midi: number) => h - 24 - ((midi - 36) / 60) * (h - 42)
+  const visible = state.samples.filter((s) => s.timestampMs >= start)
+  if (!visible.length) { traceCtx.fillStyle = '#9999aa'; traceCtx.font = '13px Inter, sans-serif'; traceCtx.fillText('Record to see your pitch movement', 18, h / 2); return }
+  const segments = traceSegments(visible, state.key); const colors: Record<string, string> = { default: '#313342', red: '#df5f67', blue: '#4b83d6', neutral: '#8c7b45' }
+  for (const segment of segments) { traceCtx.beginPath(); segment.points.forEach((sample, i) => { const x = ((sample.timestampMs - start) / 8000) * w; const y = scaleY(continuousMidiFromFrequency(sample.frequencyHz)); i ? traceCtx.lineTo(x, y) : traceCtx.moveTo(x, y) }); traceCtx.strokeStyle = colors[segment.color]; traceCtx.lineWidth = 2.5; traceCtx.stroke(); if (segment.marker) { const middle = segment.points[Math.floor(segment.points.length / 2)]; const x = ((middle.timestampMs - start) / 8000) * w; const y = scaleY(midiFromFrequency(middle.frequencyHz)); traceCtx.fillStyle = colors[segment.color]; traceCtx.font = 'bold 18px Georgia'; traceCtx.fillText(accidentalGlyph(segment.accidental as any), x + 4, y - 7) } }
+}
+function updateKey() { state.direction = state.keyIndex < 0 ? 'flat' : 'sharp'; state.key = keyAt(Math.abs(state.keyIndex), state.direction); keyName.textContent = keyLabel(state.key); renderStaff() }
+function retargetDemo(midi: number) { const now = performance.now(); state.samples = makeDemoSamples(now, midi); state.currentMidi = midi; state.currentFrequency = frequencyFromMidi(midi); state.currentCents = 0; state.lastReliable = now; setReadout(midi, state.currentFrequency, 0); drawTrace(); drawStaffTrace(); drawOverlay(staffWrap.clientWidth) }
+function demoMode() { state.demoActive = true; state.arrowsEnabled = true; updateArrowButton(); retargetDemo(demoTargetMidi(state.lastPlayedMidi)); statusEl.textContent = 'Visual demo · press ` again to clear'; document.querySelector('#record-label')!.textContent = 'Demo trace · continuous pitch movement' }
+function setReadout(midi: number, frequency: number, cents: number) { const n = notationForMidi(midi, state.key); targetEl.textContent = `${n.written.letter}${n.written.accidental === 'natural' ? '' : accidentalGlyph(n.written.accidental)}${n.written.octave}`; frequencyEl.textContent = `${frequency.toFixed(1)} Hz · ${n.isChromatic ? 'chromatic' : 'diatonic'}`; centsEl.textContent = `${cents >= 0 ? '+' : ''}${cents.toFixed(0)}` }
+function recordSample(frequency: number, confidence: number) { const timestampMs = performance.now(); state.samples.push({ timestampMs, frequencyHz: frequency, confidence }); const cutoff = timestampMs - 8000; state.samples = state.samples.filter((s) => s.timestampMs >= cutoff); drawTrace(); drawStaffTrace(); document.querySelector('#trace-time')!.textContent = `0:${Math.min(8, Math.floor((timestampMs - (state.samples[0]?.timestampMs ?? timestampMs)) / 1000)).toString().padStart(2, '0')}` }
+function updateArrowButton() { micButton.innerHTML = state.arrowsEnabled ? '<span class="mic-icon active">●</span> Hide arrows' : '<span class="mic-icon">●</span> Show arrows' }
+function stopMic() { if (!state.stream) return; state.stream.getTracks().forEach((track) => track.stop()); state.stream = null; cancelAnimationFrame(state.raf); state.audioContext?.close(); state.audioContext = null; statusEl.textContent = 'Ready to listen'; updateArrowButton(); drawOverlay(staffWrap.clientWidth) }
+async function startMic() { if (state.stream) return true; try { state.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, autoGainControl: true, noiseSuppression: true } }); state.audioContext = new AudioContext(); await state.audioContext.resume(); const source = state.audioContext.createMediaStreamSource(state.stream); const analyser = state.audioContext.createAnalyser(); analyser.fftSize = 2048; source.connect(analyser); const detector = PitchDetector.forFloat32Array(analyser.fftSize); const buffer = new Float32Array(detector.inputLength); statusEl.textContent = state.recording ? 'Recording locally' : 'Listening locally'; updateArrowButton(); const loop = () => { if (!state.stream || !state.audioContext) return; analyser.getFloatTimeDomainData(buffer); const [pitch, clarity] = detector.findPitch(buffer, state.audioContext.sampleRate); const loudness = Math.sqrt(buffer.reduce((sum, value) => sum + value * value, 0) / buffer.length); if (clarity >= 0.88 && loudness > 0.012 && pitch > 65 && pitch < 1100) { const midi = midiFromFrequency(pitch); const cents = centsFromTarget(pitch, midi); state.currentMidi = midi; state.currentFrequency = pitch; state.currentCents = cents; state.lastReliable = performance.now(); setReadout(midi, pitch, cents); if (state.recording) recordSample(pitch, clarity) } drawOverlay(staffWrap.clientWidth); if (performance.now() - state.lastReliable > 1200) { targetEl.textContent = '—'; frequencyEl.textContent = 'Sing a note to begin'; centsEl.textContent = '—' } state.raf = requestAnimationFrame(loop) }; loop(); return true } catch { state.stream = null; state.audioContext = null; statusEl.textContent = 'Microphone permission needed'; frequencyEl.textContent = 'Allow microphone access to start listening'; return false } }
+async function setArrowsEnabled(enabled: boolean) { state.arrowsEnabled = enabled; updateArrowButton(); if (enabled) { const started = await startMic(); if (!started) { state.arrowsEnabled = false; updateArrowButton() } } else stopMic(); drawOverlay(staffWrap.clientWidth) }
+async function playMidi(midi: number) { state.lastPlayedMidi = midi; if (state.demoActive) retargetDemo(midi); if (!state.audioContext) state.audioContext = new AudioContext(); await state.audioContext.resume(); state.piano ??= SplendidGrandPiano(state.audioContext); state.piano.start({ note: midi, velocity: 80 }); frequencyEl.textContent = `Played ${frequencyFromMidi(midi).toFixed(1)} Hz on piano` }
+async function playRecording() { if (!state.samples.length || playbackButton.disabled) return; if (!state.audioContext) state.audioContext = new AudioContext(); await state.audioContext.resume(); state.piano ??= SplendidGrandPiano(state.audioContext); const first = state.samples[0].timestampMs; const start = state.audioContext.currentTime + 0.05; for (const sample of state.samples) { const midi = midiFromFrequency(sample.frequencyHz); const time = start + (sample.timestampMs - first) / 1000; state.piano.start({ note: midi, time, duration: 0.14, velocity: 75 }) } playbackButton.disabled = true; playbackButton.innerHTML = '<span>▶</span> Playing recording'; window.setTimeout(() => { playbackButton.disabled = false; playbackButton.innerHTML = '<span>▶</span> Play recording' }, Math.max(500, (state.samples.at(-1)!.timestampMs - first) + 700)) }
+function staffClick(event: PointerEvent) { const rect = staffWrap.getBoundingClientRect(); const width = Math.max(640, staffWrap.clientWidth || 900); const x = event.clientX - rect.left + staffWrap.scrollLeft; if (x < 70 || x > width - 40) return; const y = event.clientY - rect.top; const point = noteAtStaffPoint(x, y, width); state.hoverMidi = point.midi; state.hoverX = x; state.hoverY = y; state.hoverPinned = true; drawOverlay(width); playMidi(point.midi) }
+function updateHover(event: PointerEvent) { const rect = staffWrap.getBoundingClientRect(); const width = Math.max(640, staffWrap.clientWidth || 900); const x = event.clientX - rect.left + staffWrap.scrollLeft; const y = event.clientY - rect.top; state.hoverPinned = false; if (x < 70 || x > width - 40 || y < 0 || y > 285) { state.hoverMidi = null; drawOverlay(width); return } const point = noteAtStaffPoint(x, y, width); state.hoverMidi = point.midi; state.hoverX = x; state.hoverY = y; drawOverlay(width) }
+micButton.addEventListener('click', () => { void setArrowsEnabled(!state.arrowsEnabled) }); recordButton.addEventListener('click', () => { state.recording = !state.recording; recordButton.classList.toggle('is-recording', state.recording); recordButton.innerHTML = state.recording ? '<span class="record-icon"></span> Stop recording' : '<span class="record-icon"></span> Record'; playbackButton.hidden = state.recording || !state.samples.length; document.querySelector('#record-label')!.textContent = state.recording ? 'Recording · 8 second rolling window' : 'Live monitor · 8 second window'; if (state.recording) void setArrowsEnabled(true); else statusEl.textContent = state.stream ? 'Listening locally' : 'Ready to listen' }); playbackButton.addEventListener('click', () => { void playRecording() })
+document.querySelector('#flatter')!.addEventListener('click', () => { state.keyIndex = Math.max(-7, state.keyIndex - 1); updateKey() }); document.querySelector('#sharper')!.addEventListener('click', () => { state.keyIndex = Math.min(7, state.keyIndex + 1); updateKey() }); staffWrap.addEventListener('pointermove', updateHover); staffWrap.addEventListener('pointerleave', () => { if (!state.hoverPinned) { state.hoverMidi = null; drawOverlay(Math.max(640, staffWrap.clientWidth || 900)) } }); staffWrap.addEventListener('click', staffClick); window.addEventListener('resize', () => { renderStaff(); drawStaffTrace() }); window.addEventListener('keydown', (event) => { if (event.key !== '`') return; if (state.samples.length) { state.demoActive = false; state.samples = []; state.currentMidi = null; state.lastReliable = 0; playbackButton.hidden = true; targetEl.textContent = '—'; frequencyEl.textContent = 'Sing a note to begin'; centsEl.textContent = '—'; statusEl.textContent = 'Ready to listen'; document.querySelector('#record-label')!.textContent = 'Live monitor · 8 second window'; renderStaff() } else demoMode() }); updateArrowButton(); renderStaff()
