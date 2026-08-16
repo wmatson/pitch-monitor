@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Open the printed local URL. Microphone access requires a secure context (localhost is allowed; GitHub Pages is HTTPS).
+Open the printed local URL. Microphone access requires a secure context (localhost is allowed; GitHub Pages is HTTPS). On desktop, plain staff clicks play the written note; Shift-click raises it by a semitone and Alt/Option-click lowers it by a semitone. Mobile modifier playback is best-effort.
 
 ## Verification and build
 

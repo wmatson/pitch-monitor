@@ -12,7 +12,7 @@ import {
   notationForMidi,
   isDiatonicMidi,
 } from '../src/music/spelling'
-import { staffPosition, candidateFromStaff, staffY, accidentalFromStaffX } from '../src/music/staff'
+import { staffPosition, candidateFromStaff, staffY, semitoneOffsetForModifiers } from '../src/music/staff'
 import { traceSegments } from '../src/recording/trace'
 import { makeDemoSamples, demoTargetMidi } from '../src/demo'
 
@@ -64,9 +64,10 @@ describe('staff coordinates', () => {
     expect(staffY(0, 'treble')).toBe(92.5)
     expect(staffY(0, 'bass')).toBe(216.5)
     expect(staffY(-6, 'treble')).toBe(122.5)
-    expect(accidentalFromStaffX(10, 100)).toBe('flat')
-    expect(accidentalFromStaffX(50, 100)).toBe('natural')
-    expect(accidentalFromStaffX(90, 100)).toBe('sharp')
+    expect(semitoneOffsetForModifiers(false, false)).toBe(0)
+    expect(semitoneOffsetForModifiers(true, false)).toBe(1)
+    expect(semitoneOffsetForModifiers(false, true)).toBe(-1)
+    expect(semitoneOffsetForModifiers(true, true)).toBe(0)
   })
 })
 
