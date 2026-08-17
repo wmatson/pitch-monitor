@@ -11,4 +11,5 @@ export const candidateFromStaff = (position: number, clef: 'treble' | 'bass'): W
 }
 export const staffY = (position: number, clef: 'treble' | 'bass') => (clef === 'treble' ? 92.5 : 216.5) - position * 5
 export const semitoneOffsetForModifiers = (shiftKey: boolean, altKey: boolean): -1 | 0 | 1 => shiftKey === altKey ? 0 : shiftKey ? 1 : -1
+export const staffLayout = (width: number) => width < 600 ? { left: 36, right: 24 } : { left: 80, right: 40 }
 export const vexKey = (pitch: WrittenPitch) => `${pitch.letter.toLowerCase()}/${pitch.octave}`

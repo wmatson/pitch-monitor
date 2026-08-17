@@ -12,7 +12,7 @@ import {
   notationForMidi,
   isDiatonicMidi,
 } from '../src/music/spelling'
-import { staffPosition, candidateFromStaff, staffY, semitoneOffsetForModifiers } from '../src/music/staff'
+import { staffPosition, candidateFromStaff, staffY, semitoneOffsetForModifiers, staffLayout } from '../src/music/staff'
 import { traceSegments } from '../src/recording/trace'
 import { makeDemoSamples, demoTargetMidi } from '../src/demo'
 
@@ -64,10 +64,18 @@ describe('staff coordinates', () => {
     expect(staffY(0, 'treble')).toBe(92.5)
     expect(staffY(0, 'bass')).toBe(216.5)
     expect(staffY(-6, 'treble')).toBe(122.5)
+  })
+  it('maps modifier keys to chromatic playback offsets', () => {
     expect(semitoneOffsetForModifiers(false, false)).toBe(0)
     expect(semitoneOffsetForModifiers(true, false)).toBe(1)
     expect(semitoneOffsetForModifiers(false, true)).toBe(-1)
     expect(semitoneOffsetForModifiers(true, true)).toBe(0)
+  })
+  it('uses compact mobile insets and desktop staff margins', () => {
+    expect(staffLayout(320)).toEqual({ left: 36, right: 24 })
+    expect(staffLayout(599)).toEqual({ left: 36, right: 24 })
+    expect(staffLayout(600)).toEqual({ left: 80, right: 40 })
+    expect(staffLayout(1110)).toEqual({ left: 80, right: 40 })
   })
 })
 
