@@ -1,4 +1,4 @@
-# Pitchline
+# Pitch Monitor
 
 A static, browser-local vocal pitch monitor. Sing into the microphone and follow the purple correction arrow on the VexFlow grand staff.
 
