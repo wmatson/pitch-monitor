@@ -15,6 +15,7 @@ import {
 import { staffPosition, candidateFromStaff, staffY, semitoneOffsetForModifiers, staffLayout } from '../src/music/staff'
 import { traceSegments } from '../src/recording/trace'
 import { makeDemoSamples, demoTargetMidi } from '../src/demo'
+import { microphoneConstraints, isReliablePitch, isPitchVisible } from '../src/recording/microphone'
 
 describe('pitch math', () => {
   it('maps 440 Hz to A4', () => expect(midiFromFrequency(440)).toBe(69))
@@ -103,5 +104,31 @@ describe('trace interpretation', () => {
     expect(demo[0].timestampMs).toBe(0)
     expect(demo.at(-1)?.timestampMs).toBe(8000)
     expect(new Set(demo.map((sample) => Math.round(12 * Math.log2(sample.frequencyHz / 440) + 69))).size).toBeGreaterThan(3)
+  })
+})
+
+describe('microphone pitch input', () => {
+  it('leaves mobile microphone processing off so piano harmonics are preserved', () => {
+    expect(microphoneConstraints).toEqual({
+      audio: {
+        channelCount: { ideal: 1 },
+        echoCancellation: false,
+        autoGainControl: false,
+        noiseSuppression: false,
+      },
+    })
+  })
+
+  it('accepts quieter but still clear piano and vocal frames', () => {
+    expect(isReliablePitch({ pitch: 220, clarity: 0.76, loudness: 0.004 })).toBe(true)
+    expect(isReliablePitch({ pitch: 220, clarity: 0.74, loudness: 0.02 })).toBe(false)
+    expect(isReliablePitch({ pitch: 40, clarity: 0.95, loudness: 0.2 })).toBe(false)
+    expect(isReliablePitch({ pitch: 1400, clarity: 0.95, loudness: 0.2 })).toBe(false)
+  })
+
+  it('keeps the live arrow visible only while a recent pitch is available', () => {
+    expect(isPitchVisible(true, 1000, 2199)).toBe(true)
+    expect(isPitchVisible(true, 1000, 2200)).toBe(false)
+    expect(isPitchVisible(false, 1000, 1100)).toBe(false)
   })
 })
