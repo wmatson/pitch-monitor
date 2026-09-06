@@ -16,6 +16,7 @@ import { staffPosition, candidateFromStaff, staffY, semitoneOffsetForModifiers, 
 import { traceSegments } from '../src/recording/trace'
 import { makeDemoSamples, demoTargetMidi } from '../src/demo'
 import { microphoneConstraints, isReliablePitch, isPitchVisible } from '../src/recording/microphone'
+import { pianoPlaybackEvents } from '../src/recording/pianoPlayback'
 
 describe('pitch math', () => {
   it('maps 440 Hz to A4', () => expect(midiFromFrequency(440)).toBe(69))
@@ -130,5 +131,38 @@ describe('microphone pitch input', () => {
     expect(isPitchVisible(true, 1000, 2199)).toBe(true)
     expect(isPitchVisible(true, 1000, 2200)).toBe(false)
     expect(isPitchVisible(false, 1000, 1100)).toBe(false)
+  })
+
+  it('reconstructs the sung tune as target-note events without changing timing', () => {
+    const samples = [
+      { timestampMs: 1000, frequencyHz: frequencyFromMidi(60), confidence: 0.9 },
+      { timestampMs: 1020, frequencyHz: frequencyFromMidi(60), confidence: 0.9 },
+      { timestampMs: 1040, frequencyHz: frequencyFromMidi(61), confidence: 0.9 },
+      { timestampMs: 1080, frequencyHz: frequencyFromMidi(61), confidence: 0.9 },
+      { timestampMs: 1120, frequencyHz: frequencyFromMidi(62), confidence: 0.9 },
+    ]
+
+    expect(pianoPlaybackEvents(samples)).toEqual([
+      { midi: 60, startMs: 0, durationMs: 40 },
+      { midi: 61, startMs: 40, durationMs: 80 },
+      { midi: 62, startMs: 120, durationMs: 50 },
+    ])
+  })
+
+  it('removes an isolated target-note glitch but keeps the surrounding tune', () => {
+    const samples = [
+      { timestampMs: 1000, frequencyHz: frequencyFromMidi(60), confidence: 0.9 },
+      { timestampMs: 1020, frequencyHz: frequencyFromMidi(60), confidence: 0.9 },
+      { timestampMs: 1040, frequencyHz: frequencyFromMidi(61), confidence: 0.9 },
+      { timestampMs: 1060, frequencyHz: frequencyFromMidi(60), confidence: 0.9 },
+      { timestampMs: 1080, frequencyHz: frequencyFromMidi(60), confidence: 0.9 },
+      { timestampMs: 1120, frequencyHz: frequencyFromMidi(62), confidence: 0.9 },
+      { timestampMs: 1200, frequencyHz: frequencyFromMidi(62), confidence: 0.9 },
+    ]
+
+    expect(pianoPlaybackEvents(samples)).toEqual([
+      { midi: 60, startMs: 0, durationMs: 120 },
+      { midi: 62, startMs: 120, durationMs: 80 },
+    ])
   })
 })
