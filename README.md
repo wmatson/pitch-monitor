@@ -32,3 +32,7 @@ The production output is `dist/` and is built with `base: './'`, so it works ben
 - Enharmonic spelling prefers sharp accidentals in sharp keys and flat accidentals in flat keys; chromatic naturals are used to cancel a key-signature alteration.
 - The staff uses treble and bass notation with conventional ledger-line extension. The trace keeps continuous cents-level measurements while its color and annotations are recomputed from the current key.
 - Audio is processed in the browser. Pitchy handles McLeod pitch detection; smplr supplies click-to-hear and optional pitch-transcription playback. Recorded voice audio is captured with MediaRecorder and played back locally.
+
+## Offline singing regression fixtures
+
+`npm run test` also runs the microphone pitch-frame path against a small vendored set of CC0 singing samples under `tests/fixtures/singing/`. The WAVs are normalized copies of retained source previews; exact source URLs, creators, rights statements, and transformations are recorded in `tests/fixtures/singing/metadata.json`. The fixture adapter feeds decoded PCM through the same Pitchy frame analysis and reliability predicate used by the browser microphone monitor, without opening a microphone or making network requests.
