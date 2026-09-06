@@ -162,7 +162,24 @@ describe('microphone pitch input', () => {
 
     expect(pianoPlaybackEvents(samples)).toEqual([
       { midi: 60, startMs: 0, durationMs: 120 },
-      { midi: 62, startMs: 120, durationMs: 80 },
+      { midi: 62, startMs: 120, durationMs: 130 },
+    ])
+  })
+
+  it('preserves rests by segmenting note offsets across long detection gaps', () => {
+    const samples = [
+      { timestampMs: 1000, frequencyHz: frequencyFromMidi(60), confidence: 0.9 },
+      { timestampMs: 1020, frequencyHz: frequencyFromMidi(60), confidence: 0.9 },
+      { timestampMs: 1060, frequencyHz: frequencyFromMidi(61), confidence: 0.9 },
+      { timestampMs: 1080, frequencyHz: frequencyFromMidi(61), confidence: 0.9 },
+      { timestampMs: 1300, frequencyHz: frequencyFromMidi(62), confidence: 0.9 },
+      { timestampMs: 1320, frequencyHz: frequencyFromMidi(62), confidence: 0.9 },
+    ]
+
+    expect(pianoPlaybackEvents(samples)).toEqual([
+      { midi: 60, startMs: 0, durationMs: 60 },
+      { midi: 61, startMs: 60, durationMs: 70 },
+      { midi: 62, startMs: 300, durationMs: 70 },
     ])
   })
 })
