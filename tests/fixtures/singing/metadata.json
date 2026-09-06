@@ -1,0 +1,42 @@
+{
+  "license_policy": "Only exact fixture pages that explicitly state CC0 are vendored.",
+  "verified_utc": "2026-09-06",
+  "fixtures": [
+    {
+      "id": "buggly-melody",
+      "file": "normalized/buggly-melody.wav",
+      "source_reference": "source/buggly-748553.mp3",
+      "original_url": "https://freesound.org/people/buggly/sounds/748553/",
+      "download_url": "https://cdn.freesound.org/previews/748/748553_9088242-lq.mp3",
+      "creator": "buggly",
+      "original_filename": "feminine singing gibberish ethereal melody (Freesound page title; unauthenticated page does not expose the source filename)",
+      "license": "CC0, stated in the exact Freesound sound description: \"cc0. recorded on an android phone.\"",
+      "use": "ordinary melodic singing; female voice; no trustworthy note target",
+      "transformations": "Downloaded the publicly playable 48 kHz MP3 preview, converted to mono 16 kHz signed 16-bit PCM WAV with ffmpeg. Full preview retained as source reference."
+    },
+    {
+      "id": "buggly-transition",
+      "file": "normalized/buggly-transition.wav",
+      "source_reference": "source/buggly-748553.mp3",
+      "original_url": "https://freesound.org/people/buggly/sounds/748553/",
+      "download_url": "https://cdn.freesound.org/previews/748/748553_9088242-lq.mp3",
+      "creator": "buggly",
+      "original_filename": "feminine singing gibberish ethereal melody (same source as buggly-melody)",
+      "license": "CC0, stated in the exact Freesound sound description.",
+      "use": "short note-transition window; female voice; no invented pitch target",
+      "transformations": "Trimmed 0.8s through 4.3s from the retained source preview, then converted to mono 16 kHz signed 16-bit PCM WAV with ffmpeg."
+    },
+    {
+      "id": "shangusburger-crowd-f",
+      "file": "normalized/shangusburger-crowd-f.wav",
+      "source_reference": "source/shangusburger-763886.mp3",
+      "original_url": "https://freesound.org/people/ShangusBurger/sounds/763886/",
+      "download_url": "https://cdn.freesound.org/previews/763/763886_11744683-lq.mp3",
+      "creator": "ShangusBurger; voice contributors are credited on the source page",
+      "original_filename": "CRWDSing_I Ih Vowel Sung Near F 02_ShaneVincent_GSC24_XY-AKG214-96k.wav",
+      "license": "CC0, exact source description says the library was published online for free under CC0.",
+      "use": "imperfect/noisy sustained vowel around concert F; crowd/stereo source downmixed for the detector",
+      "transformations": "Downloaded the publicly playable 96 kHz MP3 preview, converted to mono 16 kHz signed 16-bit PCM WAV with ffmpeg. Full preview retained as source reference."
+    }
+  ]
+}

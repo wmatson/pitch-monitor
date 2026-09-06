@@ -14,6 +14,16 @@ export type PitchFrame = { pitch: number; clarity: number; loudness: number }
 export type DetectedPitch = PitchFrame & { timestampMs: number }
 export const LIVE_PITCH_TIMEOUT_MS = 1200
 
+export const analyzePitchFrame = (
+  detector: ReturnType<typeof PitchDetector.forFloat32Array>,
+  buffer: Float32Array,
+  sampleRate: number,
+): PitchFrame => {
+  const [pitch, clarity] = detector.findPitch(buffer, sampleRate)
+  const loudness = Math.sqrt(buffer.reduce((sum, value) => sum + value * value, 0) / buffer.length)
+  return { pitch, clarity, loudness }
+}
+
 export const isReliablePitch = ({ pitch, clarity, loudness }: PitchFrame) =>
   clarity >= 0.75 && loudness > 0.003 && pitch > 65 && pitch < 1100
 
@@ -66,10 +76,9 @@ export class MicrophoneMonitor {
         if (this.stopped || !this.currentStream || !this.currentAudioContext) return
         try {
           analyser.getFloatTimeDomainData(buffer)
-          const [pitch, clarity] = detector.findPitch(buffer, this.currentAudioContext.sampleRate)
-          const loudness = Math.sqrt(buffer.reduce((sum, value) => sum + value * value, 0) / buffer.length)
-          if (isReliablePitch({ pitch, clarity, loudness })) {
-            this.options.onPitch({ pitch, clarity, loudness, timestampMs: performance.now() })
+          const frame = analyzePitchFrame(detector, buffer, this.currentAudioContext.sampleRate)
+          if (isReliablePitch(frame)) {
+            this.options.onPitch({ ...frame, timestampMs: performance.now() })
           }
         } catch {
           // A mobile browser can tear down an audio node while backgrounding the page.

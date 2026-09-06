@@ -17,6 +17,7 @@ import { traceSegments } from '../src/recording/trace'
 import { makeDemoSamples, demoTargetMidi } from '../src/demo'
 import { microphoneConstraints, isReliablePitch, isPitchVisible } from '../src/recording/microphone'
 import { pianoPlaybackEvents } from '../src/recording/pianoPlayback'
+import { recordingDataFromFixture } from './fixtures/singing/audioFixtures'
 
 describe('pitch math', () => {
   it('maps 440 Hz to A4', () => expect(midiFromFrequency(440)).toBe(69))
@@ -181,5 +182,37 @@ describe('microphone pitch input', () => {
       { midi: 61, startMs: 60, durationMs: 70 },
       { midi: 62, startMs: 300, durationMs: 70 },
     ])
+  })
+
+  it('smooths a sub-frame pitch boundary blip instead of replaying it as a piano attack', () => {
+    const samples = [
+      { timestampMs: 0, frequencyHz: frequencyFromMidi(60), confidence: 0.9 },
+      { timestampMs: 20, frequencyHz: frequencyFromMidi(61), confidence: 0.9 },
+      { timestampMs: 40, frequencyHz: frequencyFromMidi(60), confidence: 0.9 },
+    ]
+
+    expect(pianoPlaybackEvents(samples)).toEqual([{ midi: 60, startMs: 0, durationMs: 90 }])
+  })
+})
+
+describe('offline singing fixtures', () => {
+  it('converts a real singing WAV through the same frame acceptance path as the microphone', () => {
+    const samples = recordingDataFromFixture('buggly-melody.wav')
+    expect(samples.length).toBeGreaterThan(100)
+    expect(Math.max(...samples.map((sample) => sample.frequencyHz)) - Math.min(...samples.map((sample) => sample.frequencyHz))).toBeGreaterThan(40)
+    expect(samples.every((sample) => sample.confidence >= 0.75)).toBe(true)
+  })
+
+  it('keeps a noisy sustained crowd vowel usable without claiming an exact note', () => {
+    const samples = recordingDataFromFixture('shangusburger-crowd-f.wav')
+    expect(samples.length).toBeGreaterThan(40)
+    expect(samples.every((sample) => sample.frequencyHz > 65 && sample.frequencyHz < 1100)).toBe(true)
+  })
+
+  it('turns a short sung transition into multiple timestamped recording samples', () => {
+    const samples = recordingDataFromFixture('buggly-transition.wav')
+    expect(samples.length).toBeGreaterThan(20)
+    expect(new Set(samples.map((sample) => midiFromFrequency(sample.frequencyHz))).size).toBeGreaterThan(2)
+    expect(samples.at(-1)!.timestampMs).toBeGreaterThan(samples[0].timestampMs)
   })
 })

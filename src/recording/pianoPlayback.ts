@@ -6,6 +6,7 @@ import type { RawSample } from './trace'
 // note onsets/offsets so gaps in detection become rests.
 export const PIANO_NOTE_TAIL_MS = 50
 export const PIANO_NOTE_GAP_MS = 120
+export const PIANO_GLITCH_MAX_MS = 35
 
 export type PianoPlaybackEvent = {
   midi: number
@@ -48,5 +49,21 @@ export const pianoPlaybackEvents = (samples: RawSample[]): PianoPlaybackEvent[] 
       segmentStart = index
     }
   }
-  return events
+
+  // A pitch detector can briefly cross a semitone boundary during vibrato or
+  // a consonant. Do not make those sub-frame blips audible as piano attacks.
+  const smoothed: PianoPlaybackEvent[] = []
+  for (const event of events) {
+    const prior = smoothed.at(-1)
+    if (event.durationMs < PIANO_GLITCH_MAX_MS && prior) {
+      prior.durationMs = Math.max(prior.startMs + prior.durationMs, event.startMs + event.durationMs) - prior.startMs
+      continue
+    }
+    if (prior?.midi === event.midi && event.startMs <= prior.startMs + prior.durationMs) {
+      prior.durationMs = Math.max(prior.startMs + prior.durationMs, event.startMs + event.durationMs) - prior.startMs
+      continue
+    }
+    smoothed.push({ ...event })
+  }
+  return smoothed
 }
